@@ -1,1 +1,1 @@
-##Simple hello world program with dpdk.
+Simple hello world program with dpdk.
