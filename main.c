@@ -93,9 +93,9 @@ static inline void
 print_port_statistics(void)
 {
     uint64_t i, min_rtt, max_rtt, sum_rtt, avg_rtt;
-    rte_log(RTE_LOG_INFO, RTE_LOGTYPE_PINGPONG, "====== ping-pong statistics =====\n");
-    rte_log(RTE_LOG_INFO, RTE_LOGTYPE_PINGPONG, "tx %" PRIu64 " ping packets\n", port_statistics.tx);
-    rte_log(RTE_LOG_INFO, RTE_LOGTYPE_PINGPONG, "rx %" PRIu64 " pong packets\n", port_statistics.rx);
+    rte_log(RTE_LOG_INFO, RTE_LOGTYPE_PINGPONG, "====== hello-world statistics =====\n");
+    rte_log(RTE_LOG_INFO, RTE_LOGTYPE_PINGPONG, "tx %" PRIu64 " hello packets\n", port_statistics.tx);
+    rte_log(RTE_LOG_INFO, RTE_LOGTYPE_PINGPONG, "rx %" PRIu64 " hello packets\n", port_statistics.rx);
     rte_log(RTE_LOG_INFO, RTE_LOGTYPE_PINGPONG, "dopped %" PRIu64 " packets\n", port_statistics.dropped);
 
     min_rtt = 999999999;
@@ -284,6 +284,7 @@ contruct_ping_packet(void)
 }
 
 /* main ping loop */
+/*Only transmit do not receive*/
 static void
 ping_main_loop(void)
 {
@@ -311,73 +312,25 @@ ping_main_loop(void)
 
     for (pkt_idx = 0; pkt_idx < nb_pkts && !force_quit; pkt_idx++)
     {
-	rte_log(RTE_LOG_INFO, RTE_LOGTYPE_PINGPONG, "Sending packet %u on lcore %u\n", pkt_idx, lcore_id);
+	    rte_log(RTE_LOG_INFO, RTE_LOGTYPE_PINGPONG, 
+                "Sending packet %u on lcore %u\n", pkt_idx, lcore_id);
         ping_tsc = rte_rdtsc();
         /* do ping */
         nb_tx = rte_eth_tx_burst(portid, 0, &m, 1);
-        received_pong = false;
+        
 
         if (nb_tx)
             port_statistics.tx += nb_tx;
-
-        /* wait for pong */
-        while (!received_pong && !force_quit)
-        {
-	    rte_log(RTE_LOG_INFO, RTE_LOGTYPE_PINGPONG, "Waiting pong on lcore %u\n", lcore_id);
-            nb_rx = rte_eth_rx_burst(portid, 0, pkts_burst, MAX_PKT_BURST);
-            pong_tsc = rte_rdtsc();
-            if (nb_rx)
-            {
-                /* only 1 packet expected */
-                if (nb_rx > 1)
-                    rte_log(RTE_LOG_WARNING, RTE_LOGTYPE_PINGPONG, "%u packets received, 1 expected.\n", nb_rx);
-
-                for (i = 0; i < nb_rx; i++)
-                {
-                    m = pkts_burst[i];
-
-                    eth_hdr = rte_pktmbuf_mtod(m, struct rte_ether_hdr *);
-                    eth_type = rte_cpu_to_be_16(eth_hdr->ether_type);
-                    l2_len = sizeof(struct rte_ether_hdr);
-                    if (eth_type == RTE_ETHER_TYPE_VLAN)
-                    {
-                        vlan_hdr = (struct rte_vlan_hdr *)((char *)eth_hdr + sizeof(struct rte_ether_hdr));
-                        l2_len += sizeof(struct rte_vlan_hdr);
-                        eth_type = rte_be_to_cpu_16(vlan_hdr->eth_proto);
-                    }
-                    if (eth_type == RTE_ETHER_TYPE_IPV4)
-                    {
-                        ip_hdr = (struct rte_ipv4_hdr *)((char *)eth_hdr + l2_len);
-                        /* compare mac & ip, confirm it is a pong packet */
-                        if (rte_is_same_ether_addr(&eth_hdr->d_addr, &client_ether_addr) &&
-                            reverse_ip_addr(ip_hdr->dst_addr) == client_ip_addr)
-                        {
-                            diff_tsc = pong_tsc - ping_tsc;
-                            rtt_us = diff_tsc * US_PER_S / tsc_hz;
-                            port_statistics.rtt[port_statistics.rx] = rtt_us;
-
-                            rte_ether_addr_copy(&client_ether_addr, &eth_hdr->s_addr);
-                            rte_ether_addr_copy(&server_ether_addr, &eth_hdr->d_addr);
-
-                            ip_hdr->src_addr = rte_cpu_to_be_32(client_ip_addr);
-                            ip_hdr->dst_addr = rte_cpu_to_be_32(server_ip_addr);
-
-                            received_pong = true;
-
-                            port_statistics.rx += 1;
-
-                            break;
-                        }
-                    }
-                }
-            }
-        }
+        
+        received_pong = false;
+        //570
     }
     /* print port statistics when ping main loop finishes */
     print_port_statistics();
 }
 
 /* main pong loop */
+/*Only reveive ping packets do not transmit*/
 static void
 pong_main_loop(void)
 {
@@ -397,6 +350,7 @@ pong_main_loop(void)
     rte_log(RTE_LOG_INFO, RTE_LOGTYPE_PINGPONG, "waiting ping packets\n");
 
     /* wait for pong */
+    
     while (!force_quit)
     {
         nb_rx = rte_eth_rx_burst(portid, 0, pkts_burst, MAX_PKT_BURST);
@@ -404,7 +358,7 @@ pong_main_loop(void)
         {
             for (i = 0; i < nb_rx; i++)
             {
-
+                rte_log(RTE_LOG_INFO, RTE_LOGTYPE_PINGPONG, "Received Packet\n");
                 m = pkts_burst[i];
 
                 eth_hdr = rte_pktmbuf_mtod(m, struct rte_ether_hdr *);
@@ -425,20 +379,23 @@ pong_main_loop(void)
                     {
                         port_statistics.rx += 1;
                         /* do pong */
-                        rte_ether_addr_copy(&server_ether_addr, &eth_hdr->s_addr);
-                        rte_ether_addr_copy(&client_ether_addr, &eth_hdr->d_addr);
+                        // rte_ether_addr_copy(&server_ether_addr, &eth_hdr->s_addr);
+                        // rte_ether_addr_copy(&client_ether_addr, &eth_hdr->d_addr);
 
-                        ip_hdr->src_addr = rte_cpu_to_be_32(server_ip_addr);
-                        ip_hdr->dst_addr = rte_cpu_to_be_32(client_ip_addr);
+                        // ip_hdr->src_addr = rte_cpu_to_be_32(server_ip_addr);
+                        // ip_hdr->dst_addr = rte_cpu_to_be_32(client_ip_addr);
 
-                        nb_tx = rte_eth_tx_burst(portid, 0, &m, 1);
-                        if (nb_tx)
-                            port_statistics.tx += nb_tx;
+                        // nb_tx = rte_eth_tx_burst(portid, 0, &m, 1);
+                        // if (nb_tx)
+                        //     port_statistics.tx += nb_tx;
                     }
                 }
             }
         }
+
+        //529
     }
+    print_port_statistics();
 }
 
 static int
@@ -608,3 +565,63 @@ int main(int argc, char **argv)
 
     return 0;
 }
+
+
+    
+
+
+// ------
+    // /* wait for pong */
+    //     while (!received_pong && !force_quit)
+    //     {
+	//     rte_log(RTE_LOG_INFO, RTE_LOGTYPE_PINGPONG, "Waiting pong on lcore %u\n", lcore_id);
+    //         nb_rx = rte_eth_rx_burst(portid, 0, pkts_burst, MAX_PKT_BURST);
+    //         pong_tsc = rte_rdtsc();
+    //         if (nb_rx)
+    //         {
+    //             /* only 1 packet expected */
+    //             if (nb_rx > 1)
+    //                 rte_log(RTE_LOG_WARNING, RTE_LOGTYPE_PINGPONG, "%u packets received, 1 expected.\n", nb_rx);
+
+    //             for (i = 0; i < nb_rx; i++)
+    //             {
+    //                 m = pkts_burst[i];
+
+    //                 eth_hdr = rte_pktmbuf_mtod(m, struct rte_ether_hdr *);
+    //                 eth_type = rte_cpu_to_be_16(eth_hdr->ether_type);
+    //                 l2_len = sizeof(struct rte_ether_hdr);
+    //                 if (eth_type == RTE_ETHER_TYPE_VLAN)
+    //                 {
+    //                     vlan_hdr = (struct rte_vlan_hdr *)((char *)eth_hdr + sizeof(struct rte_ether_hdr));
+    //                     l2_len += sizeof(struct rte_vlan_hdr);
+    //                     eth_type = rte_be_to_cpu_16(vlan_hdr->eth_proto);
+    //                 }
+    //                 if (eth_type == RTE_ETHER_TYPE_IPV4)
+    //                 {
+    //                     ip_hdr = (struct rte_ipv4_hdr *)((char *)eth_hdr + l2_len);
+    //                     /* compare mac & ip, confirm it is a pong packet */
+    //                     if (rte_is_same_ether_addr(&eth_hdr->d_addr, &client_ether_addr) &&
+    //                         reverse_ip_addr(ip_hdr->dst_addr) == client_ip_addr)
+    //                     {
+    //                         diff_tsc = pong_tsc - ping_tsc;
+    //                         rtt_us = diff_tsc * US_PER_S / tsc_hz;
+    //                         port_statistics.rtt[port_statistics.rx] = rtt_us;
+
+    //                         rte_ether_addr_copy(&client_ether_addr, &eth_hdr->s_addr);
+    //                         rte_ether_addr_copy(&server_ether_addr, &eth_hdr->d_addr);
+
+    //                         ip_hdr->src_addr = rte_cpu_to_be_32(client_ip_addr);
+    //                         ip_hdr->dst_addr = rte_cpu_to_be_32(server_ip_addr);
+
+    //                         received_pong = true;
+
+    //                         port_statistics.rx += 1;
+
+    //                         break;
+    //                     }
+    //                 }
+    //             }
+    //         }
+    //     }
+    
+
