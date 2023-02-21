@@ -158,7 +158,100 @@ signal_handler(int signum)
         force_quit = true;
     }
 }
+// /**
+//  * force polling thread sleep until one-shot rx interrupt triggers
+//  * @param port_id
+//  *  Port id.
+//  * @param queue_id
+//  *  Rx queue id.
+//  * @return
+//  *  0 on success
+//  */
+// static int
+// sleep_until_rx_interrupt(int num, int lcore)
+// {
+// 	/*
+// 	 * we want to track when we are woken up by traffic so that we can go
+// 	 * back to sleep again without log spamming. Avoid cache line sharing
+// 	 * to prevent threads stepping on each others' toes.
+// 	 */
+// 	static struct {
+// 		bool wakeup;
+// 	} __rte_cache_aligned status[RTE_MAX_LCORE];
+// 	struct rte_epoll_event event[num];
+// 	int n, i;
+// 	uint16_t port_id;
+// 	uint8_t queue_id;
+// 	void *data;
 
+// 	if (status[lcore].wakeup) {
+// 		RTE_LOG(INFO, RTE_LOGTYPE_PINGPONG,
+// 				"lcore %u sleeps until interrupt triggers\n",
+// 				rte_lcore_id());
+// 	}
+
+// 	n = rte_epoll_wait(RTE_EPOLL_PER_THREAD, event, num, 10);
+// 	for (i = 0; i < n; i++) {
+// 		data = event[i].epdata.data;
+// 		port_id = ((uintptr_t)data) >> CHAR_BIT;
+// 		queue_id = ((uintptr_t)data) &
+// 			RTE_LEN2MASK(CHAR_BIT, uint8_t);
+// 		RTE_LOG(INFO, RTE_LOGTYPE_PINGPONG,
+// 			"lcore %u is waked up from rx interrupt on"
+// 			" port %d queue %d\n",
+// 			rte_lcore_id(), port_id, queue_id);
+// 	}
+// 	status[lcore].wakeup = n != 0;
+
+// 	return 0;
+// }
+
+static void turn_on_off_intr(struct lcore_conf *qconf, bool on)
+{
+	int i;
+	struct lcore_rx_queue *rx_queue;
+	uint8_t queue_id;
+	uint16_t port_id;
+
+	for (i = 0; i < qconf->n_rx_queue; ++i) {
+		rx_queue = &(qconf->rx_queue_list[i]);
+		port_id = rx_queue->port_id;
+		queue_id = rx_queue->queue_id;
+
+		rte_spinlock_lock(&(locks[port_id]));
+		if (on)
+			rte_eth_dev_rx_intr_enable(port_id, queue_id);
+		else
+			rte_eth_dev_rx_intr_disable(port_id, queue_id);
+		rte_spinlock_unlock(&(locks[port_id]));
+	}
+}
+
+static int event_register(struct lcore_conf *qconf)
+{
+	struct lcore_rx_queue *rx_queue;
+	uint8_t queueid;
+	uint16_t portid;
+	uint32_t data;
+	int ret;
+	int i;
+
+	for (i = 0; i < qconf->n_rx_queue; ++i) {
+		rx_queue = &(qconf->rx_queue_list[i]);
+		portid = rx_queue->port_id;
+		queueid = rx_queue->queue_id;
+		data = portid << CHAR_BIT | queueid;
+
+		ret = rte_eth_dev_rx_intr_ctl_q(portid, queueid,
+						RTE_EPOLL_PER_THREAD,
+						RTE_INTR_EVENT_ADD,
+						(void *)((uintptr_t)data));
+		if (ret)
+			return ret;
+	}
+
+	return 0;
+}
 /* display usage */
 static void
 pingpong_usage(const char *prgname)
@@ -358,7 +451,7 @@ pong_main_loop(void)
         {
             for (i = 0; i < nb_rx; i++)
             {
-                rte_log(RTE_LOG_INFO, RTE_LOGTYPE_PINGPONG, "Received Packet\n");
+                
                 m = pkts_burst[i];
 
                 eth_hdr = rte_pktmbuf_mtod(m, struct rte_ether_hdr *);
@@ -377,6 +470,7 @@ pong_main_loop(void)
                     if (rte_is_same_ether_addr(&eth_hdr->d_addr, &server_ether_addr) &&
                         (reverse_ip_addr(ip_hdr->dst_addr) == server_ip_addr))
                     {
+                        rte_log(RTE_LOG_INFO, RTE_LOGTYPE_PINGPONG, "Received Packet from client\n");
                         port_statistics.rx += 1;
                         /* do pong */
                         // rte_ether_addr_copy(&server_ether_addr, &eth_hdr->s_addr);
