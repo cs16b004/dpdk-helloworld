@@ -432,7 +432,7 @@ static int sleep_until_rx_interrupt(int num, int lcore)
 	void *data;
 
 	if (status[lcore].wakeup) {
-		RTE_LOG(INFO,RTE_LOGTYPE_PINGPONG,
+		RTE_LOG(RTE_LOG_INFO,RTE_LOGTYPE_PINGPONG,
 				"lcore %u sleeps until interrupt triggers\n",
 				rte_lcore_id());
 	}
@@ -729,7 +729,7 @@ int main(int argc, char **argv)
 	//rte_eth_dev_callback_register(0,
 	//	RTE_ETH_EVENT_INTR_LSC, lsi_event_callback, NULL);
     
-
+    	uint32_t data;
 	
 
     /* init one RX queue */
