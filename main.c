@@ -142,14 +142,14 @@ static bool server_mode = false;
 
 static struct rte_eth_dev_tx_buffer *tx_buffer;
 
-static struct rte_eth_conf port_conf = {
-    .rxmode = {
-        .split_hdr_size = 0,
-    },
-    .txmode = {
-        .mq_mode = ETH_MQ_TX_NONE,
-    },
-};
+// static struct rte_eth_conf port_conf = {
+//     .rxmode = {
+//         .split_hdr_size = 0,
+//     },
+//     .txmode = {
+//         .mq_mode = ETH_MQ_TX_NONE,
+//     },
+// };
 
 
 print_stats(void)
@@ -729,7 +729,7 @@ int main(int argc, char **argv)
 
     ret = rte_eth_tx_buffer_set_err_callback(tx_buffer,
                                              rte_eth_tx_buffer_count_callback,
-                                             &port_statistics.dropped);
+                                             &ping_port_statistics.dropped);
     if (ret < 0)
         rte_exit(EXIT_FAILURE,
                  "Cannot set error callback for tx buffer on port %u\n",
