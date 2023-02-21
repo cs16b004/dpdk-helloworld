@@ -206,52 +206,52 @@ signal_handler(int signum)
 // 	return 0;
 // }
 
-static void turn_on_off_intr(struct lcore_conf *qconf, bool on)
-{
-	int i;
-	struct lcore_rx_queue *rx_queue;
-	uint8_t queue_id;
-	uint16_t port_id;
+// static void turn_on_off_intr(struct lcore_conf *qconf, bool on)
+// {
+// 	int i;
+// 	struct lcore_rx_queue *rx_queue;
+// 	uint8_t queue_id;
+// 	uint16_t port_id;
 
-	for (i = 0; i < qconf->n_rx_queue; ++i) {
-		rx_queue = &(qconf->rx_queue_list[i]);
-		port_id = rx_queue->port_id;
-		queue_id = rx_queue->queue_id;
+// 	for (i = 0; i < qconf->n_rx_queue; ++i) {
+// 		rx_queue = &(qconf->rx_queue_list[i]);
+// 		port_id = rx_queue->port_id;
+// 		queue_id = rx_queue->queue_id;
 
-		rte_spinlock_lock(&(locks[port_id]));
-		if (on)
-			rte_eth_dev_rx_intr_enable(port_id, queue_id);
-		else
-			rte_eth_dev_rx_intr_disable(port_id, queue_id);
-		rte_spinlock_unlock(&(locks[port_id]));
-	}
-}
+// 		rte_spinlock_lock(&(locks[port_id]));
+// 		if (on)
+// 			rte_eth_dev_rx_intr_enable(port_id, queue_id);
+// 		else
+// 			rte_eth_dev_rx_intr_disable(port_id, queue_id);
+// 		rte_spinlock_unlock(&(locks[port_id]));
+// 	}
+// }
 
-static int event_register(struct lcore_conf *qconf)
-{
-	struct lcore_rx_queue *rx_queue;
-	uint8_t queueid;
-	uint16_t portid;
-	uint32_t data;
-	int ret;
-	int i;
+// static int event_register(struct lcore_conf *qconf)
+// {
+// 	struct lcore_rx_queue *rx_queue;
+// 	uint8_t queueid;
+// 	uint16_t portid;
+// 	uint32_t data;
+// 	int ret;
+// 	int i;
 
-	for (i = 0; i < qconf->n_rx_queue; ++i) {
-		rx_queue = &(qconf->rx_queue_list[i]);
-		portid = rx_queue->port_id;
-		queueid = rx_queue->queue_id;
-		data = portid << CHAR_BIT | queueid;
+// 	for (i = 0; i < qconf->n_rx_queue; ++i) {
+// 		rx_queue = &(qconf->rx_queue_list[i]);
+// 		portid = rx_queue->port_id;
+// 		queueid = rx_queue->queue_id;
+// 		data = portid << CHAR_BIT | queueid;
 
-		ret = rte_eth_dev_rx_intr_ctl_q(portid, queueid,
-						RTE_EPOLL_PER_THREAD,
-						RTE_INTR_EVENT_ADD,
-						(void *)((uintptr_t)data));
-		if (ret)
-			return ret;
-	}
+// 		ret = rte_eth_dev_rx_intr_ctl_q(portid, queueid,
+// 						RTE_EPOLL_PER_THREAD,
+// 						RTE_INTR_EVENT_ADD,
+// 						(void *)((uintptr_t)data));
+// 		if (ret)
+// 			return ret;
+// 	}
 
-	return 0;
-}
+// 	return 0;
+// }
 /* display usage */
 static void
 pingpong_usage(const char *prgname)
