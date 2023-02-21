@@ -1,20 +1,118 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <stdint.h>
+#include <inttypes.h>
+#include <sys/types.h>
+#include <sys/queue.h>
+#include <netinet/in.h>
+#include <setjmp.h>
+#include <stdarg.h>
+#include <ctype.h>
+#include <errno.h>
+#include <getopt.h>
 #include <signal.h>
 #include <stdbool.h>
-#include <getopt.h>
+
+#include <rte_common.h>
+#include <rte_log.h>
+#include <rte_malloc.h>
+#include <rte_memory.h>
+#include <rte_memcpy.h>
+#include <rte_eal.h>
+#include <rte_launch.h>
+#include <rte_atomic.h>
+#include <rte_cycles.h>
+#include <rte_prefetch.h>
+#include <rte_lcore.h>
+#include <rte_per_lcore.h>
+#include <rte_branch_prediction.h>
+#include <rte_interrupts.h>
+#include <rte_random.h>
+#include <rte_debug.h>
+#include <rte_ether.h>
+#include <rte_ethdev.h>
+#include <rte_mempool.h>
+#include <rte_mbuf.h>
+
 
 #include <rte_byteorder.h>
-#include <rte_log.h>
-#include <rte_common.h>
 #include <rte_config.h>
 #include <rte_errno.h>
-#include <rte_ethdev.h>
 #include <rte_ip.h>
-#include <rte_mbuf.h>
-#include <rte_malloc.h>
-#include <rte_ether.h>
+
 #define APP "pingpong"
 
 uint32_t PINGPONG_LOG_LEVEL = RTE_LOG_DEBUG;
+
+#define NB_MBUF   8192
+
+#define MAX_PKT_BURST 32
+#define BURST_TX_DRAIN_US 100 /* TX drain every ~100us */
+
+/*
+ * Configurable number of RX/TX ring descriptors
+ */
+#define RTE_TEST_RX_DESC_DEFAULT 1024
+#define RTE_TEST_TX_DESC_DEFAULT 1024
+static uint16_t nb_rxd = RTE_TEST_RX_DESC_DEFAULT;
+static uint16_t nb_txd = RTE_TEST_TX_DESC_DEFAULT;
+
+/* ethernet addresses of ports */
+static struct rte_ether_addr lsi_ports_eth_addr[RTE_MAX_ETHPORTS];
+
+/* mask of enabled ports */
+static uint32_t lsi_enabled_port_mask = 0;
+
+static unsigned int lsi_rx_queue_per_lcore = 1;
+
+/* destination port for L2 forwarding */
+static unsigned lsi_dst_ports[RTE_MAX_ETHPORTS] = {0};
+
+#define MAX_PKT_BURST 32
+
+#define MAX_RX_QUEUE_PER_LCORE 16
+#define MAX_TX_QUEUE_PER_PORT 16
+struct lcore_queue_conf {
+	unsigned n_rx_port;
+	unsigned rx_port_list[MAX_RX_QUEUE_PER_LCORE];
+	unsigned tx_queue_id;
+} __rte_cache_aligned;
+struct lcore_queue_conf lcore_queue_conf[1];
+
+struct rte_eth_dev_tx_buffer *tx_buffer[1];
+
+static struct rte_eth_conf port_conf = {
+	.rxmode = {
+		.split_hdr_size = 0,
+	},
+	.txmode = {
+		.mq_mode = ETH_MQ_TX_NONE,
+	},
+	.intr_conf = {
+		.lsc = 1, /**< lsc interrupt feature enabled */
+        .rxq=1,
+	},
+};
+
+
+
+/* Per-port statistics struct */
+struct lsi_port_statistics {
+	uint64_t tx;
+	uint64_t rx;
+	uint64_t dropped;
+} __rte_cache_aligned;
+struct lsi_port_statistics port_statistics[RTE_MAX_ETHPORTS];
+
+
+
+
+/* A tsc-based timer responsible for triggering statistics printout */
+#define TIMER_MILLISECOND 2000000ULL /* around 1ms at 2 Ghz */
+#define MAX_TIMER_PERIOD 86400 /* 1 day max */
+static int64_t timer_period = 10 * TIMER_MILLISECOND * 1000; /* default period is 10 seconds */
+
 
 /* the client side */
 static struct rte_ether_addr client_ether_addr =
@@ -63,6 +161,109 @@ static struct rte_eth_conf port_conf = {
         .mq_mode = ETH_MQ_TX_NONE,
     },
 };
+
+
+print_stats(void)
+{
+	struct rte_eth_link link;
+	uint64_t total_packets_dropped, total_packets_tx, total_packets_rx;
+	uint16_t portid;
+
+	total_packets_dropped = 0;
+	total_packets_tx = 0;
+	total_packets_rx = 0;
+
+	const char clr[] = { 27, '[', '2', 'J', '\0' };
+	const char topLeft[] = { 27, '[', '1', ';', '1', 'H','\0' };
+	int link_get_err;
+
+		/* Clear screen and move to top left */
+	printf("%s%s", clr, topLeft);
+
+	printf("\nPort statistics ====================================");
+
+	for (portid = 0; portid <= 0; portid++) {
+		/* skip ports that are not enabled */
+		if ((lsi_enabled_port_mask & (1 << portid)) == 0)
+			continue;
+
+		memset(&link, 0, sizeof(link));
+		link_get_err = rte_eth_link_get_nowait(portid, &link);
+		printf("\nStatistics for port %u ------------------------------"
+			   "\nLink status: %25s"
+			   "\nLink speed: %26s"
+			   "\nLink duplex: %25s"
+			   "\nPackets sent: %24"PRIu64
+			   "\nPackets received: %20"PRIu64
+			   "\nPackets dropped: %21"PRIu64,
+			   portid,
+			   link_get_err < 0 ? "Link get failed" :
+			   (link.link_status ? "Link up" : "Link down"),
+			   link_get_err < 0 ? "0" :
+			   rte_eth_link_speed_to_str(link.link_speed),
+			   link_get_err < 0 ? "Link get failed" :
+			   (link.link_duplex == ETH_LINK_FULL_DUPLEX ? \
+					"full-duplex" : "half-duplex"),
+			   port_statistics[portid].tx,
+			   port_statistics[portid].rx,
+			   port_statistics[portid].dropped);
+
+		total_packets_dropped += port_statistics[portid].dropped;
+		total_packets_tx += port_statistics[portid].tx;
+		total_packets_rx += port_statistics[portid].rx;
+	}
+	printf("\nAggregate statistics ==============================="
+		   "\nTotal packets sent: %18"PRIu64
+		   "\nTotal packets received: %14"PRIu64
+		   "\nTotal packets dropped: %15"PRIu64,
+		   total_packets_tx,
+		   total_packets_rx,
+		   total_packets_dropped);
+	printf("\n====================================================\n");
+
+	fflush(stdout);
+}
+
+/**
+ * It will be called as the callback for specified port after a LSI interrupt
+ * has been fully handled. This callback needs to be implemented carefully as
+ * it will be called in the interrupt host thread which is different from the
+ * application main thread.
+ *
+ * @param port_id
+ *  Port id.
+ * @param type
+ *  event type.
+ * @param param
+ *  Pointer to(address of) the parameters.
+ *
+ * @return
+ *  int.
+ */
+static int
+lsi_event_callback(uint16_t port_id, enum rte_eth_event_type type, void *param,
+		    void *ret_param)
+{
+	struct rte_eth_link link;
+	int ret;
+	char link_status_text[RTE_ETH_LINK_MAX_STR_LEN];
+
+	RTE_SET_USED(param);
+	RTE_SET_USED(ret_param);
+
+	printf("\n\nIn registered callback...\n");
+	printf("Event type: %s\n", type == RTE_ETH_EVENT_INTR_LSC ? "LSC interrupt" : "unknown event");
+	ret = rte_eth_link_get_nowait(port_id, &link);
+	if (ret < 0) {
+		printf("Failed link get on port %d: %s\n",
+		       port_id, rte_strerror(-ret));
+		return ret;
+	}
+	rte_eth_link_to_str(link_status_text, sizeof(link_status_text), &link);
+	printf("Port %d %s\n\n", port_id, link_status_text);
+
+	return 0;
+}
 
 /* Per-port statistics struct */
 struct pingpong_port_statistics
@@ -158,7 +359,6 @@ signal_handler(int signum)
         force_quit = true;
     }
 }
-
 /* display usage */
 static void
 pingpong_usage(const char *prgname)
@@ -358,7 +558,7 @@ pong_main_loop(void)
         {
             for (i = 0; i < nb_rx; i++)
             {
-                rte_log(RTE_LOG_INFO, RTE_LOGTYPE_PINGPONG, "Received Packet\n");
+                
                 m = pkts_burst[i];
 
                 eth_hdr = rte_pktmbuf_mtod(m, struct rte_ether_hdr *);
@@ -377,6 +577,7 @@ pong_main_loop(void)
                     if (rte_is_same_ether_addr(&eth_hdr->d_addr, &server_ether_addr) &&
                         (reverse_ip_addr(ip_hdr->dst_addr) == server_ip_addr))
                     {
+                        rte_log(RTE_LOG_INFO, RTE_LOGTYPE_PINGPONG, "Received Packet from client\n");
                         port_statistics.rx += 1;
                         /* do pong */
                         // rte_ether_addr_copy(&server_ether_addr, &eth_hdr->s_addr);
@@ -419,6 +620,11 @@ int main(int argc, char **argv)
     unsigned int nb_mbufs;
     unsigned int nb_lcores;
     unsigned int lcore_id;
+    struct lcore_queue_conf *qconf;
+	uint16_t nb_ports;
+	uint16_t portid, portid_last = 0;
+	unsigned lcore_id, rx_lcore_id;
+	unsigned nb_ports_in_mask = 0;
 
     /* init EAL */
     ret = rte_eal_init(argc, argv);
@@ -481,12 +687,23 @@ int main(int argc, char **argv)
         rte_exit(EXIT_FAILURE, "Cannot configure device: err=%d, port=%u\n",
                  ret, portid);
 
-    ret = rte_eth_dev_adjust_nb_rx_tx_desc(portid, &nb_rxd,
-                                           &nb_txd);
-    if (ret < 0)
-        rte_exit(EXIT_FAILURE,
-                 "Cannot adjust number of descriptors: err=%d, port=%u\n",
-                 ret, portid);
+    // ret = rte_eth_dev_adjust_nb_rx_tx_desc(portid, &nb_rxd,
+    //                                        &nb_txd);
+    // if (ret < 0)
+    //     rte_exit(EXIT_FAILURE,
+    //              "Cannot adjust number of descriptors: err=%d, port=%u\n",
+    //              ret, portid);
+
+    /* register lsi interrupt callback, need to be after
+		 * rte_eth_dev_configure(). if (intr_conf.lsc == 0), no
+		 * lsc interrupt will be present, and below callback to
+		 * be registered will never be called.
+		 */
+	rte_eth_dev_callback_register(0,
+		RTE_ETH_EVENT_INTR_LSC, lsi_event_callback, NULL);
+    
+
+	
 
     /* init one RX queue */
     fflush(stdout);
@@ -535,6 +752,13 @@ int main(int argc, char **argv)
     if (ret < 0)
         rte_exit(EXIT_FAILURE, "rte_eth_dev_start:err=%d, port=%u\n",
                  ret, portid);
+    
+    ret = rte_eth_promiscuous_enable(portid);
+	if (ret != 0)
+		rte_exit(EXIT_FAILURE,
+			"rte_eth_promiscuous_enable: err=%s, port=%u\n",
+			rte_strerror(-ret), portid);
+
 
     /* initialize port stats */
     initlize_port_statistics();
