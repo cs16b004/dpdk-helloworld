@@ -432,7 +432,7 @@ static int sleep_until_rx_interrupt(int num, int lcore)
 	void *data;
 
 	if (status[lcore].wakeup) {
-		RTE_LOG(RTE_LOG_INFO,RTE_LOGTYPE_PINGPONG,
+		rte_log(RTE_LOG_INFO,RTE_LOGTYPE_PINGPONG,
 				"lcore %u sleeps until interrupt triggers\n",
 				rte_lcore_id());
 	}
@@ -443,7 +443,7 @@ static int sleep_until_rx_interrupt(int num, int lcore)
 		port_id = ((uintptr_t)data) >> CHAR_BIT;
 		queue_id = ((uintptr_t)data) &
 			RTE_LEN2MASK(CHAR_BIT, uint8_t);
-		RTE_LOG(INFO, RTE_LOGTYPE_PINGPONG,
+		rte_log(INFO, RTE_LOGTYPE_PINGPONG,
 			"lcore %u is waked up from rx interrupt on"
 			" port %d queue %d\n",
 			rte_lcore_id(), port_id, queue_id);
