@@ -86,7 +86,7 @@ static struct rte_eth_conf port_conf = {
 		.mq_mode = ETH_MQ_TX_NONE,
 	},
 	.intr_conf = {
-		.lsc = 1, /**< lsc interrupt feature enabled */
+	//	.lsc = 1, /**< lsc interrupt feature enabled */
         .rxq=1,
 	},
 };
@@ -415,7 +415,43 @@ ip_sum(const unaligned_uint16_t *hdr, int hdr_len)
 
     return ~sum;
 }
+static int sleep_until_rx_interrupt(int num, int lcore)
+{
+	/*
+	 * we want to track when we are woken up by traffic so that we can go
+	 * back to sleep again without log spamming. Avoid cache line sharing
+	 * to prevent threads stepping on each others' toes.
+	 */
+	static struct {
+		bool wakeup;
+	} __rte_cache_aligned status[RTE_MAX_LCORE];
+	struct rte_epoll_event event[num];
+	int n, i;
+	uint16_t port_id;
+	uint8_t queue_id;
+	void *data;
 
+	if (status[lcore].wakeup) {
+		RTE_LOG(INFO,RTE_LOGTYPE_PINGPONG,
+				"lcore %u sleeps until interrupt triggers\n",
+				rte_lcore_id());
+	}
+
+	n = rte_epoll_wait(RTE_EPOLL_PER_THREAD, event, num, 10);
+	for (i = 0; i < n; i++) {
+		data = event[i].epdata.data;
+		port_id = ((uintptr_t)data) >> CHAR_BIT;
+		queue_id = ((uintptr_t)data) &
+			RTE_LEN2MASK(CHAR_BIT, uint8_t);
+		RTE_LOG(INFO, RTE_LOGTYPE_PINGPONG,
+			"lcore %u is waked up from rx interrupt on"
+			" port %d queue %d\n",
+			rte_lcore_id(), port_id, queue_id);
+	}
+	status[lcore].wakeup = n != 0;
+
+	return 0;
+}
 /* construct ping packet */
 static struct rte_mbuf *
 contruct_ping_packet(void)
@@ -539,9 +575,12 @@ pong_main_loop(void)
     rte_log(RTE_LOG_INFO, RTE_LOGTYPE_PINGPONG, "waiting ping packets\n");
 
     /* wait for pong */
-    
+    rte_eth_dev_rx_intr_enable(0, 0);
+    rte_log(RTE_LOG_INFO, RTE_LOGTYPE_PINGPONG, "Enabled RX Interrupt\n");
     while (!force_quit)
-    {
+    {   sleep_until_rx_interrupt(
+							1,
+							lcore_id);
         nb_rx = rte_eth_rx_burst(portid, 0, pkts_burst, MAX_PKT_BURST);
         if (nb_rx)
         {
@@ -687,8 +726,8 @@ int main(int argc, char **argv)
 		 * lsc interrupt will be present, and below callback to
 		 * be registered will never be called.
 		 */
-	rte_eth_dev_callback_register(0,
-		RTE_ETH_EVENT_INTR_LSC, lsi_event_callback, NULL);
+	//rte_eth_dev_callback_register(0,
+	//	RTE_ETH_EVENT_INTR_LSC, lsi_event_callback, NULL);
     
 
 	
@@ -702,9 +741,18 @@ int main(int argc, char **argv)
                                  rte_eth_dev_socket_id(portid),
                                  &rxq_conf,
                                  pingpong_pktmbuf_pool);
+    
     if (ret < 0)
         rte_exit(EXIT_FAILURE, "rte_eth_rx_queue_setup:err=%d, port=%u\n",
                  ret, portid);
+
+    /*Register event*/
+    ret = rte_eth_dev_rx_intr_ctl_q(portid,0,
+						RTE_EPOLL_PER_THREAD,
+						RTE_INTR_EVENT_ADD,
+						(void *)((uintptr_t)data));
+    //
+    
 
     /* init one TX queue on each port */
     fflush(stdout);
