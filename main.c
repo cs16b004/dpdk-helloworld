@@ -59,15 +59,13 @@ static uint16_t nb_rxd = RTE_TEST_RX_DESC_DEFAULT;
 static uint16_t nb_txd = RTE_TEST_TX_DESC_DEFAULT;
 
 /* ethernet addresses of ports */
-static struct rte_ether_addr lsi_ports_eth_addr[RTE_MAX_ETHPORTS];
+static struct rte_ether_addr lsi_ports_eth_addr[1];
 
 /* mask of enabled ports */
 static uint32_t lsi_enabled_port_mask = 0;
 
 static unsigned int lsi_rx_queue_per_lcore = 1;
 
-/* destination port for L2 forwarding */
-static unsigned lsi_dst_ports[RTE_MAX_ETHPORTS] = {0};
 
 #define MAX_PKT_BURST 32
 
@@ -78,9 +76,7 @@ struct lcore_queue_conf {
 	unsigned rx_port_list[MAX_RX_QUEUE_PER_LCORE];
 	unsigned tx_queue_id;
 } __rte_cache_aligned;
-struct lcore_queue_conf lcore_queue_conf[1];
-
-struct rte_eth_dev_tx_buffer *tx_buffer[1];
+struct lcore_queue_conf lcore_queue_conf;
 
 static struct rte_eth_conf port_conf = {
 	.rxmode = {
@@ -130,13 +126,6 @@ static uint16_t cfg_udp_dst = 1001;
 #define MAX_PKT_BURST 32
 #define MEMPOOL_CACHE_SIZE 128
 
-/*
- * Configurable number of RX/TX ring descriptors
- */
-#define RTE_TEST_RX_DESC_DEFAULT 1024
-#define RTE_TEST_TX_DESC_DEFAULT 1024
-static uint16_t nb_rxd = RTE_TEST_RX_DESC_DEFAULT;
-static uint16_t nb_txd = RTE_TEST_TX_DESC_DEFAULT;
 
 int RTE_LOGTYPE_PINGPONG;
 
@@ -273,21 +262,21 @@ struct pingpong_port_statistics
     uint64_t *rtt;
     uint64_t dropped;
 } __rte_cache_aligned;
-struct pingpong_port_statistics port_statistics;
+struct pingpong_port_statistics ping_port_statistics;
 
 static inline void
-initlize_port_statistics(void)
+initlize_ping_port_statistics(void)
 {
-    port_statistics.tx = 0;
-    port_statistics.rx = 0;
-    port_statistics.rtt = malloc(sizeof(uint64_t) * nb_pkts);
-    port_statistics.dropped = 0;
+    ping_port_statistics.tx = 0;
+    ping_port_statistics.rx = 0;
+    ping_port_statistics.rtt = malloc(sizeof(uint64_t) * nb_pkts);
+    ping_port_statistics.dropped = 0;
 }
 
 static inline void
 destroy_port_statistics(void)
 {
-    free(port_statistics.rtt);
+    free(ping_port_statistics.rtt);
 }
 
 static inline void
@@ -295,9 +284,9 @@ print_port_statistics(void)
 {
     uint64_t i, min_rtt, max_rtt, sum_rtt, avg_rtt;
     rte_log(RTE_LOG_INFO, RTE_LOGTYPE_PINGPONG, "====== hello-world statistics =====\n");
-    rte_log(RTE_LOG_INFO, RTE_LOGTYPE_PINGPONG, "tx %" PRIu64 " hello packets\n", port_statistics.tx);
-    rte_log(RTE_LOG_INFO, RTE_LOGTYPE_PINGPONG, "rx %" PRIu64 " hello packets\n", port_statistics.rx);
-    rte_log(RTE_LOG_INFO, RTE_LOGTYPE_PINGPONG, "dopped %" PRIu64 " packets\n", port_statistics.dropped);
+    rte_log(RTE_LOG_INFO, RTE_LOGTYPE_PINGPONG, "tx %" PRIu64 " hello packets\n", ping_port_statistics.tx);
+    rte_log(RTE_LOG_INFO, RTE_LOGTYPE_PINGPONG, "rx %" PRIu64 " hello packets\n", ping_port_statistics.rx);
+    rte_log(RTE_LOG_INFO, RTE_LOGTYPE_PINGPONG, "dopped %" PRIu64 " packets\n", ping_port_statistics.dropped);
 
     min_rtt = 999999999;
     max_rtt = 0;
@@ -305,11 +294,11 @@ print_port_statistics(void)
     avg_rtt = 0;
     for (i = 0; i < nb_pkts; i++)
     {
-        sum_rtt += port_statistics.rtt[i];
-        if (port_statistics.rtt[i] < min_rtt)
-            min_rtt = port_statistics.rtt[i];
-        if (port_statistics.rtt[i] > max_rtt)
-            max_rtt = port_statistics.rtt[i];
+        sum_rtt += ping_port_statistics.rtt[i];
+        if (ping_port_statistics.rtt[i] < min_rtt)
+            min_rtt = ping_port_statistics.rtt[i];
+        if (ping_port_statistics.rtt[i] > max_rtt)
+            max_rtt = ping_port_statistics.rtt[i];
     }
     avg_rtt = sum_rtt / nb_pkts;
     rte_log(RTE_LOG_INFO, RTE_LOGTYPE_PINGPONG, "min rtt: %" PRIu64 " us\n", min_rtt);
@@ -520,7 +509,7 @@ ping_main_loop(void)
         
 
         if (nb_tx)
-            port_statistics.tx += nb_tx;
+            ping_port_statistics.tx += nb_tx;
         
         received_pong = false;
         //570
@@ -578,7 +567,7 @@ pong_main_loop(void)
                         (reverse_ip_addr(ip_hdr->dst_addr) == server_ip_addr))
                     {
                         rte_log(RTE_LOG_INFO, RTE_LOGTYPE_PINGPONG, "Received Packet from client\n");
-                        port_statistics.rx += 1;
+                        ping_port_statistics.rx += 1;
                         /* do pong */
                         // rte_ether_addr_copy(&server_ether_addr, &eth_hdr->s_addr);
                         // rte_ether_addr_copy(&client_ether_addr, &eth_hdr->d_addr);
@@ -616,14 +605,13 @@ pong_launch_one_lcore(__attribute__((unused)) void *dummy)
 int main(int argc, char **argv)
 {
     int ret;
-    uint16_t nb_ports;
     unsigned int nb_mbufs;
     unsigned int nb_lcores;
     unsigned int lcore_id;
     struct lcore_queue_conf *qconf;
 	uint16_t nb_ports;
 	uint16_t portid, portid_last = 0;
-	unsigned lcore_id, rx_lcore_id;
+	unsigned rx_lcore_id;
 	unsigned nb_ports_in_mask = 0;
 
     /* init EAL */
@@ -761,7 +749,7 @@ int main(int argc, char **argv)
 
 
     /* initialize port stats */
-    initlize_port_statistics();
+    initlize_ping_port_statistics();
 
     rte_log(RTE_LOG_DEBUG, RTE_LOGTYPE_PINGPONG, "Initilize port %u done.\n", portid);
 
